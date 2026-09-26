@@ -4,6 +4,8 @@ A guided machine learning workbench that runs entirely in the browser. Load a ta
 
 No server, no install, no data upload: files are read and models are trained on your own machine.
 
+https://daveskura.github.io/tabula-model-studio/
+
 ## What it does
 
 | Step | What happens |
