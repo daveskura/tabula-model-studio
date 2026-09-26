@@ -1,0 +1,11 @@
+{
+  "name": "tabula-model-studio",
+  "version": "1.0.0",
+  "description": "A guided, in-browser machine learning workbench for tabular data.",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/engine.test.js",
+    "start": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}
