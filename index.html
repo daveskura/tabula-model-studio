@@ -349,9 +349,9 @@ details summary { cursor: pointer; font-weight: 500; }
 </div>
 <div class="tip" id="tip" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<input type="file" id="fileData" class="sr" accept=".csv,.tsv,.txt,.xlsx,.xls,.json">
-<input type="file" id="fileBatch" class="sr" accept=".csv,.tsv,.txt,.xlsx,.xls,.json">
-<input type="file" id="fileLib" class="sr" accept=".csv,.tsv,.txt,.xlsx,.xls,.json">
+<input type="file" id="fileData" class="sr" accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet,.parq,.pq">
+<input type="file" id="fileBatch" class="sr" accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet,.parq,.pq">
+<input type="file" id="fileLib" class="sr" accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet,.parq,.pq">
 <input type="file" id="fileImport" class="sr" accept=".json">
 
 <script src="engine.js"></script>
@@ -619,13 +619,46 @@ async function readTableFile(file) {
     await loadXLSX(); const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
     const ws = wb.Sheets[wb.SheetNames[0]]; return Eng.fromMatrix(XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }));
   }
+  if (ext === 'parquet' || ext === 'parq' || ext === 'pq') return readParquet(await file.arrayBuffer());
   const text = await file.text();
   if (ext === 'json') {
     let arr = JSON.parse(text); if (!Array.isArray(arr)) arr = arr.rows || arr.data || [];
-    const cols = []; arr.forEach(o => Object.keys(o).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
-    return { columns: cols, rows: arr.map(o => { const r = {}; cols.forEach(c => r[c] = o[c] === null || o[c] === undefined ? '' : (typeof o[c] === 'object' ? JSON.stringify(o[c]) : o[c])); return r; }) };
+    return Eng.fromObjects(arr);
   }
   return Eng.parseCSV(text);
+}
+// Parquet: hyparquet (pure JS, Snappy built in) plus pure-JS gzip and zstd decoders, loaded on first use
+const CDN = 'https://cdn.jsdelivr.net/npm/';
+let parquetLibs = null;
+function loadParquetLibs() {
+  if (!parquetLibs) parquetLibs = Promise.all([
+    import(CDN + 'hyparquet@1.31.2/src/index.js'),
+    import(CDN + 'fzstd@0.1.1/esm/index.mjs'),
+    import(CDN + 'fflate@0.8.2/esm/browser.js'),
+  ]).catch(e => { parquetLibs = null; throw new Error('The Parquet reader could not load. Check your connection, or save the file as CSV.'); });
+  return parquetLibs;
+}
+const PARQUET_MAX_ROWS = 100000;
+async function readParquet(buf) {
+  const [hp, zstd, fflate] = await loadParquetLibs();
+  const compressors = {
+    ZSTD: (input, n) => zstd.decompress(input, new Uint8Array(n)),
+    GZIP: input => fflate.gunzipSync(input),
+  };
+  let meta;
+  try { meta = hp.parquetMetadata(buf); } catch (e) { throw new Error('This does not look like a valid Parquet file.'); }
+  const total = Number(meta.num_rows);
+  try {
+    const objs = await hp.parquetReadObjects({ file: buf, compressors, rowStart: 0, rowEnd: Math.min(total, PARQUET_MAX_ROWS) });
+    const tbl = Eng.fromObjects(objs);
+    if (!tbl.columns.length) tbl.columns = hp.parquetSchema(meta).children.map(c => c.element.name);
+    if (total > PARQUET_MAX_ROWS) tbl.note = 'Only the first ' + PARQUET_MAX_ROWS.toLocaleString('en-US') + ' of ' + total.toLocaleString('en-US') + ' rows were loaded.';
+    return tbl;
+  } catch (e) {
+    const m = String(e && e.message || e);
+    if (/compress|codec/i.test(m)) throw new Error('This file uses a compression Tabula cannot read yet (' + m + '). Snappy, gzip, zstd and uncompressed files work.');
+    throw e;
+  }
 }
 
 /* ================= downloads ================= */
@@ -690,7 +723,7 @@ function render() {
 /* ================= step 1: data ================= */
 function renderData() {
   let h = head(1, 'Load your data', 'Start with any table where each row is one example, like a customer, a sale or a day. Include the column you want to predict, with known values for past rows.');
-  h += `<div class="drop" id="drop"><div class="glyph"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0l-5 5m5-5l5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="txt"><b>Drop a file here</b><p class="muted small">CSV, TSV, Excel (.xlsx) or JSON. First row should hold column names. Files stay in your browser.</p></div><button class="btn primary" data-act="pickData">Choose file</button></div>`;
+  h += `<div class="drop" id="drop"><div class="glyph"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0l-5 5m5-5l5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="txt"><b>Drop a file here</b><p class="muted small">CSV, TSV, Excel (.xlsx), Parquet or JSON. For text files, the first row should hold column names. Files stay in your browser.</p></div><button class="btn primary" data-act="pickData">Choose file</button></div>`;
   h += `<details><summary>Or paste a table</summary><div class="stack" style="margin-top:10px"><textarea id="pasteBox" rows="6" placeholder="Paste rows copied from a spreadsheet, or CSV text with a header row"></textarea><div><button class="btn" data-act="usePaste">Use pasted table</button></div></div></details>`;
   h += `<div class="stack"><div class="label">Or explore a sample</div><div class="samples">${Object.entries(Eng.samples).map(([k, s]) => `<button class="sample" data-act="sample" data-key="${k}" aria-pressed="${S.source && S.source.sampleKey === k}"><span class="k">${esc(TASK_WORD[s.task])}</span><b>${esc(s.title)}</b><span>${esc(s.blurb)}</span></button>`).join('')}</div></div>`;
   if (S.table) {
@@ -1270,7 +1303,7 @@ document.addEventListener('dragleave', e => { const d = e.target.closest && e.ta
 document.addEventListener('drop', e => { const d = e.target.closest && e.target.closest('#drop'); if (!d) return; e.preventDefault(); d.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) handleDataFile(f); });
 
 async function handleDataFile(f) {
-  try { const tbl = await readTableFile(f); const note = setTable(tbl, { name: f.name, kind: 'file' }); if (note) S.source.note = note; S.step = 'data'; render(); renderChips(); toast('Loaded ' + plural(S.table.rows.length, 'row') + ' and ' + plural(S.table.columns.length, 'column') + '.'); }
+  try { const tbl = await readTableFile(f); const note = setTable(tbl, { name: f.name, kind: 'file' }); const nt = [tbl.note, note].filter(Boolean).join(' '); if (nt) S.source.note = nt; S.step = 'data'; render(); renderChips(); toast('Loaded ' + plural(S.table.rows.length, 'row') + ' and ' + plural(S.table.columns.length, 'column') + '.'); }
   catch (e) { toast('Could not read ' + f.name + ': ' + e.message, true); }
 }
 async function handleBatch(f) {

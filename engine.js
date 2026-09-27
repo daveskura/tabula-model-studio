@@ -107,6 +107,22 @@
     const esc = v => { if (v === null || v === undefined) return ''; const s = String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     return [columns.map(esc).join(',')].concat(rows.map(r => columns.map(c => esc(r[c])).join(','))).join('\n');
   };
+  // array of row objects (JSON, Parquet) -> table; converts BigInt, Date, boolean, nested values
+  E.fromObjects = function (arr) {
+    const cols = [], seen = new Set();
+    for (const o of arr) for (const k in o) if (!seen.has(k)) { seen.add(k); cols.push(k); }
+    const conv = v => {
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'bigint') return Number(v);
+      if (typeof v === 'number') return isFinite(v) ? v : '';
+      if (v instanceof Date) { const t = v.getTime(); if (isNaN(t)) return ''; const iso = v.toISOString(); return t % 86400000 === 0 ? iso.slice(0, 10) : iso.slice(0, 19).replace('T', ' '); }
+      if (typeof v === 'boolean') return v ? 'true' : 'false';
+      if (typeof Uint8Array !== 'undefined' && v instanceof Uint8Array) return '';
+      if (typeof v === 'object') return JSON.stringify(v, (k, x) => typeof x === 'bigint' ? Number(x) : x);
+      return v;
+    };
+    return { columns: cols, rows: arr.map(o => { const r = {}; for (const c of cols) r[c] = conv(o[c]); return r; }) };
+  };
   E.fromMatrix = function (matrix) { // array of arrays with header row (e.g. from a spreadsheet)
     const header = (matrix[0] || []).map((h, j) => (h === null || h === undefined || String(h).trim() === '') ? 'column_' + (j + 1) : String(h).trim());
     const rows = [];

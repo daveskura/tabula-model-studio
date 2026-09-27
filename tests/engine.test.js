@@ -75,3 +75,15 @@ test('forecasting beats seasonal naive and extends the series', () => {
   assert.ok(out.points[0].t > out.history.times[out.history.times.length - 1]);
   assert.ok(out.points.every(p => p.lo <= p.value && p.value <= p.hi));
 });
+
+test('row objects from JSON or Parquet are normalized', () => {
+  const t = E.fromObjects([
+    { id: 1n, when: new Date(Date.UTC(2024, 4, 2)), at: new Date(Date.UTC(2024, 4, 2, 13, 5)), ok: true, tags: ['a'], v: null },
+    { id: 2n, extra: 'x' },
+  ]);
+  assert.deepEqual(t.columns, ['id', 'when', 'at', 'ok', 'tags', 'v', 'extra']);
+  assert.deepEqual(t.rows[0], { id: 1, when: '2024-05-02', at: '2024-05-02 13:05:00', ok: 'true', tags: '["a"]', v: '', extra: '' });
+  assert.equal(t.rows[1].when, '');
+  const prof = E.profile(t);
+  assert.equal(prof.columns.find(c => c.name === 'when').type, 'date');
+});
